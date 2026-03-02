@@ -1,0 +1,47 @@
+services:
+  # ─── Main Orchestrator (runs 24/7) ────────────────────────────────────
+  main-orchestrator:
+    build:
+      context: ./main-orchestrator
+      dockerfile: Dockerfile
+    container_name: medical-orchestrator
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    volumes:
+      - shared-data:/data
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - FLASK_ENV=production
+      - WORKER_IMAGE=thamani-tinyml-matlab-worker
+      - SHARED_VOLUME=thamani-tinyml_shared-data
+      - DATA_MOUNT_PATH=/data
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:5000/api/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - medical-net
+
+  # ─── MATLAB Worker (ephemeral – NOT auto-started) ────────────────────
+  matlab-worker:
+    build:
+      context: ./matlab-worker
+      dockerfile: Dockerfile
+    image: thamani-tinyml-matlab-worker
+    volumes:
+      - shared-data:/data
+    profiles:
+      - worker
+    networks:
+      - medical-net
+
+volumes:
+  shared-data:
+    driver: local
+
+networks:
+  medical-net:
+    driver: bridge
