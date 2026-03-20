@@ -1,1 +1,9 @@
 /.DS_Store
+/dump
+Client_Deliverables_Summary.md
+Hardware_Testing_Justification.md
+STM32_Execution_Roadmap.md
+STM32_Implementation_Plan.md
+STM32_CubeMX_Configuration.md
+STM32_Firmware_Architecture.md
+STM32_Firmware_Prototypes.md
