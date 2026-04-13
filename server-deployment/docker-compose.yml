@@ -40,6 +40,7 @@ services:
 
 volumes:
   shared-data:
+    name: thamani-tinyml_shared-data
     driver: local
 
 networks:
