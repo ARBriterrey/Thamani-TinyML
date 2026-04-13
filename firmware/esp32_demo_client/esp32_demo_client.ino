@@ -1,11 +1,26 @@
 #include <WiFi.h>
 #include <HTTPClient.h>
 
+#ifndef LED_BUILTIN
+  // Fallback to pin 2 if the board package doesn't define the built-in LED
+  #define LED_BUILTIN 2 
+#endif
+
+// Helper function to blink the LED to show activity
+void blinkLED(int times, int delayMs) {
+  for(int i=0; i<times; i++) {
+    digitalWrite(LED_BUILTIN, LOW);
+    delay(delayMs);
+    digitalWrite(LED_BUILTIN, HIGH);
+    if (i < times - 1) delay(delayMs);
+  }
+}
+
 // ==============================================================================
 // CONFIGURATION
 // ==============================================================================
-const char* ssid = "YOUR_WIFI_SSID";           // Replace with your Network SSID
-const char* password = "YOUR_WIFI_PASSWORD";   // Replace with your Network Password
+const char* ssid = "Andy's edge 50 pro";           // Replace with your Network SSID
+const char* password = "Jahanavee";   // Replace with your Network Password
 
 // Your GCP instance external IP (port 5000)
 // e.g., "http://34.47.182.133:5000/api/process"
@@ -26,6 +41,10 @@ void setup() {
   Serial.begin(115200);
   delay(10);
 
+  // Initialize LED indicator
+  pinMode(LED_BUILTIN, OUTPUT);
+  digitalWrite(LED_BUILTIN, LOW); // Start with light off
+
   // Connect to Wi-Fi
   Serial.println("\n----------------------------------");
   Serial.print("Connecting to ");
@@ -33,10 +52,15 @@ void setup() {
 
   WiFi.begin(ssid, password);
 
+  bool ledState = false;
   while (WiFi.status() != WL_CONNECTED) {
+    ledState = !ledState;
+    digitalWrite(LED_BUILTIN, ledState); // Blink while connecting
     delay(500);
     Serial.print(".");
   }
+
+  digitalWrite(LED_BUILTIN, HIGH); // Solid ON when successfully connected
 
   Serial.println("");
   Serial.println("WiFi connected.");
@@ -97,10 +121,16 @@ void loop() {
         Serial.print("Latency: ");
         Serial.print(stopTime - startTime);
         Serial.println(" ms");
+        
+        // Success: 2 quick blinks to indicate data sent and response received
+        blinkLED(2, 100);
       } else {
         Serial.print("<<< Error on sending POST: ");
         Serial.println(httpResponseCode);
         Serial.println(http.errorToString(httpResponseCode).c_str());
+        
+        // Error: 5 slow blinks to indicate failure
+        blinkLED(5, 300);
       }
 
       // Free resources
