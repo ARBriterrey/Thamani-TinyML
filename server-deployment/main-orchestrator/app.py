@@ -15,7 +15,7 @@ from flask import Flask, request, jsonify
 from orchestrator import MatlabOrchestrator
 
 # ── Configuration ───────────────────────────────────────────────────────
-app = Flask(__name__)
+app = Flask(__name__, static_folder="static", static_url_path="/static")
 app.config["DATA_PATH"] = os.environ.get("DATA_MOUNT_PATH", "/data")
 
 logging.basicConfig(
@@ -32,6 +32,11 @@ orchestrator = MatlabOrchestrator(
 
 
 # ── Routes ──────────────────────────────────────────────────────────────
+@app.route("/", methods=["GET"])
+def index():
+    """Serve the demo dashboard."""
+    return app.send_static_file("index.html")
+
 @app.route("/api/health", methods=["GET"])
 def health():
     """Health check endpoint."""
