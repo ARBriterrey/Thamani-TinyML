@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Thamani — Medical Risk Scoring Platform</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <!-- Background -->
+  <div class="bg-orbs">
+    <div class="orb orb-1"></div>
+    <div class="orb orb-2"></div>
+    <div class="orb orb-3"></div>
+  </div>
+
+  <!-- Header -->
+  <header class="header">
+    <div class="header-inner">
+      <div class="logo">
+        <span class="logo-icon">⚕</span>
+        <span class="logo-text">Thamani</span>
+        <span class="logo-sub">Risk Scoring Platform</span>
+      </div>
+      <div class="status-pill" id="serverStatus">
+        <span class="status-dot"></span>
+        <span class="status-label">Checking...</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main -->
+  <main class="main">
+    <div class="page-title">
+      <h1>Medical Risk Scoring</h1>
+      <p>Enter patient vitals below to compute a clinical risk score via the MATLAB processing engine.</p>
+    </div>
+
+    <div class="grid">
+      <!-- Input Panel -->
+      <section class="card input-card">
+        <h2 class="card-title">
+          <span class="icon">📡</span> Sensor Inputs
+        </h2>
+        <p class="card-subtitle">Adjust vitals and submit for processing.</p>
+
+        <form id="sensorForm">
+          <!-- Device ID -->
+          <div class="field-group">
+            <label for="deviceId">Device ID</label>
+            <input type="text" id="deviceId" value="DEV-001" placeholder="e.g. DEV-001" />
+          </div>
+
+          <!-- Heart Rate -->
+          <div class="field-group slider-group">
+            <label>Heart Rate <span class="unit">bpm</span>
+              <span class="slider-value" id="hrVal">72</span>
+            </label>
+            <input type="range" id="heartRate" min="30" max="180" value="72"
+              oninput="document.getElementById('hrVal').textContent = this.value" />
+            <div class="range-labels"><span>30</span><span>180</span></div>
+          </div>
+
+          <!-- SpO2 -->
+          <div class="field-group slider-group">
+            <label>SpO₂ <span class="unit">%</span>
+              <span class="slider-value" id="spo2Val">98</span>
+            </label>
+            <input type="range" id="spo2" min="70" max="100" value="98"
+              oninput="document.getElementById('spo2Val').textContent = this.value" />
+            <div class="range-labels"><span>70%</span><span>100%</span></div>
+          </div>
+
+          <!-- Temperature -->
+          <div class="field-group slider-group">
+            <label>Temperature <span class="unit">°C</span>
+              <span class="slider-value" id="tempVal">36.6</span>
+            </label>
+            <input type="range" id="temperature" min="33" max="42" step="0.1" value="36.6"
+              oninput="document.getElementById('tempVal').textContent = parseFloat(this.value).toFixed(1)" />
+            <div class="range-labels"><span>33°C</span><span>42°C</span></div>
+          </div>
+
+          <!-- Systolic BP -->
+          <div class="field-group slider-group">
+            <label>Systolic BP <span class="unit">mmHg</span>
+              <span class="slider-value" id="sysVal">120</span>
+            </label>
+            <input type="range" id="systolicBp" min="60" max="200" value="120"
+              oninput="document.getElementById('sysVal').textContent = this.value" />
+            <div class="range-labels"><span>60</span><span>200</span></div>
+          </div>
+
+          <!-- Diastolic BP -->
+          <div class="field-group slider-group">
+            <label>Diastolic BP <span class="unit">mmHg</span>
+              <span class="slider-value" id="diasVal">80</span>
+            </label>
+            <input type="range" id="diastolicBp" min="40" max="130" value="80"
+              oninput="document.getElementById('diasVal').textContent = this.value" />
+            <div class="range-labels"><span>40</span><span>130</span></div>
+          </div>
+
+          <!-- Submit -->
+          <button type="submit" class="btn-primary" id="submitBtn">
+            <span class="btn-icon">▶</span> Run Risk Analysis
+          </button>
+        </form>
+
+        <!-- Preset Buttons -->
+        <div class="presets">
+          <p class="preset-label">Quick Presets</p>
+          <div class="preset-row">
+            <button class="preset-btn preset-low" onclick="applyPreset('low')">✅ Normal Patient</button>
+            <button class="preset-btn preset-moderate" onclick="applyPreset('moderate')">⚠️ Moderate Risk</button>
+            <button class="preset-btn preset-high" onclick="applyPreset('high')">🚨 Critical Case</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Result Panel -->
+      <section class="card result-card">
+        <h2 class="card-title">
+          <span class="icon">📊</span> Risk Assessment Result
+        </h2>
+        <p class="card-subtitle">Results from the MATLAB processing engine will appear here.</p>
+
+        <!-- Idle State -->
+        <div class="result-idle" id="resultIdle">
+          <div class="idle-icon">⏳</div>
+          <p>Awaiting submission...</p>
+          <p class="idle-sub">Fill in the vitals and click "Run Risk Analysis"</p>
+        </div>
+
+        <!-- Loading State -->
+        <div class="result-loading hidden" id="resultLoading">
+          <div class="spinner-wrap">
+            <div class="spinner"></div>
+          </div>
+          <p class="loading-title">Processing...</p>
+          <div class="loading-steps" id="loadingSteps">
+            <div class="step step-done" id="step1">✅ Payload validated</div>
+            <div class="step" id="step2">⏳ Saving to shared volume</div>
+            <div class="step dim" id="step3">⚙️ Spinning up worker container</div>
+            <div class="step dim" id="step4">🧠 MATLAB engine running</div>
+            <div class="step dim" id="step5">📤 Returning results</div>
+          </div>
+        </div>
+
+        <!-- Result State -->
+        <div class="result-output hidden" id="resultOutput">
+          <!-- Risk Gauge -->
+          <div class="gauge-wrap">
+            <div class="gauge" id="gauge">
+              <svg viewBox="0 0 200 110" xmlns="http://www.w3.org/2000/svg">
+                <defs>
+                  <linearGradient id="gaugeGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+                    <stop offset="0%" style="stop-color:#22c55e;stop-opacity:1" />
+                    <stop offset="50%" style="stop-color:#f59e0b;stop-opacity:1" />
+                    <stop offset="100%" style="stop-color:#ef4444;stop-opacity:1" />
+                  </linearGradient>
+                </defs>
+                <!-- Track -->
+                <path d="M 20 100 A 80 80 0 0 1 180 100" stroke="#2a2a3d" stroke-width="16" fill="none" stroke-linecap="round"/>
+                <!-- Progress -->
+                <path id="gaugeProgress" d="M 20 100 A 80 80 0 0 1 180 100"
+                      stroke="url(#gaugeGrad)" stroke-width="16" fill="none"
+                      stroke-linecap="round" stroke-dasharray="251.2" stroke-dashoffset="251.2"/>
+                <!-- Score Text -->
+                <text x="100" y="92" text-anchor="middle" font-size="28" font-weight="700" fill="white" id="gaugeScore">0</text>
+                <text x="100" y="108" text-anchor="middle" font-size="10" fill="#94a3b8">RISK SCORE</text>
+              </svg>
+            </div>
+            <div class="category-badge" id="categoryBadge">—</div>
+          </div>
+
+          <!-- Clinical Flags -->
+          <div class="flags-section" id="flagsSection">
+            <p class="flags-title">Clinical Flags</p>
+            <div class="flags-list" id="flagsList"></div>
+          </div>
+
+          <!-- Stats Grid -->
+          <div class="stats-grid" id="statsGrid"></div>
+
+          <!-- Job Metadata -->
+          <div class="meta-row" id="metaRow"></div>
+
+          <!-- Raw JSON Toggle -->
+          <button class="btn-ghost" onclick="toggleRaw()">{ } View Raw JSON</button>
+          <pre class="raw-json hidden" id="rawJson"></pre>
+        </div>
+
+        <!-- Error State -->
+        <div class="result-error hidden" id="resultError">
+          <div class="error-icon">❌</div>
+          <p class="error-title">Processing Failed</p>
+          <p class="error-msg" id="errorMsg"></p>
+        </div>
+      </section>
+    </div>
+
+    <!-- Job History -->
+    <section class="card history-card">
+      <h2 class="card-title"><span class="icon">🗂</span> Job History</h2>
+      <div class="history-list" id="historyList">
+        <p class="empty-history">No jobs submitted yet.</p>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <p>Thamani Medical Risk Scoring Platform &mdash; Demo Mode &mdash; Not for clinical use</p>
+  </footer>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
