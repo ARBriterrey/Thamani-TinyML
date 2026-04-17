@@ -119,6 +119,55 @@ class MatlabOrchestrator:
             except Exception:
                 logger.warning("Could not remove container %s", container_name)
 
+    def get_model_path(self, job_id: str) -> str:
+        """
+        Return the path to the TFLite model file produced for a job.
+
+        Raises FileNotFoundError if the worker has not written a model file yet.
+        """
+        model_path = os.path.join(self._job_dir(job_id), "model.tflite")
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(f"No model file for job {job_id}")
+        return model_path
+
+    def get_latest_model(self) -> dict:
+        """
+        Scan all job directories and return metadata for the most recently
+        produced model.tflite file.
+
+        Returns a dict with: job_id, model_url, size_bytes, created_at.
+        Raises FileNotFoundError if no model files exist yet.
+        """
+        from datetime import datetime, timezone
+
+        jobs_dir = os.path.join(self.data_path, "jobs")
+        if not os.path.exists(jobs_dir):
+            raise FileNotFoundError("No jobs directory")
+
+        latest_job_id = None
+        latest_mtime = 0.0
+
+        for entry in os.listdir(jobs_dir):
+            model_path = os.path.join(jobs_dir, entry, "model.tflite")
+            if os.path.exists(model_path):
+                mtime = os.path.getmtime(model_path)
+                if mtime > latest_mtime:
+                    latest_mtime = mtime
+                    latest_job_id = entry
+
+        if latest_job_id is None:
+            raise FileNotFoundError("No model files found")
+
+        model_path = os.path.join(jobs_dir, latest_job_id, "model.tflite")
+        return {
+            "job_id": latest_job_id,
+            "model_url": f"/api/jobs/{latest_job_id}/model",
+            "size_bytes": os.path.getsize(model_path),
+            "created_at": datetime.fromtimestamp(
+                latest_mtime, tz=timezone.utc
+            ).isoformat(),
+        }
+
     def cleanup_old_jobs(self, max_age_hours: int = 24):
         """
         Remove job data older than max_age_hours from the shared volume.

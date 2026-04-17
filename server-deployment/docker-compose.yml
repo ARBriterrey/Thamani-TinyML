@@ -1,4 +1,43 @@
 services:
+  # ─── nginx – TLS termination & reverse proxy (runs 24/7) ─────────────
+  nginx:
+    image: nginx:alpine
+    container_name: medical-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/templates/nginx.conf.template:ro
+      - certbot-webroot:/var/www/certbot:ro
+      - certbot-certs:/etc/letsencrypt:ro
+    environment:
+      - DOMAIN=${DOMAIN}
+    command: >
+      /bin/sh -c "envsubst '$$DOMAIN' < /etc/nginx/templates/nginx.conf.template
+      > /etc/nginx/nginx.conf && nginx -g 'daemon off;'"
+    depends_on:
+      - main-orchestrator
+    networks:
+      - medical-net
+
+  # ─── Certbot – certificate issuance & renewal ─────────────────────────
+  certbot:
+    image: certbot/certbot:latest
+    container_name: medical-certbot
+    volumes:
+      - certbot-webroot:/var/www/certbot
+      - certbot-certs:/etc/letsencrypt
+    # Run once to issue cert, then exit. Renewal is handled by the cron
+    # command on the host:
+    #   0 3 * * * docker compose run --rm certbot renew && docker compose restart nginx
+    entrypoint: >
+      certbot certonly --webroot --webroot-path=/var/www/certbot
+      --email ${CERT_EMAIL} --agree-tos --no-eff-email
+      -d ${DOMAIN}
+    profiles:
+      - certbot
+
   # ─── Main Orchestrator (runs 24/7) ────────────────────────────────────
   main-orchestrator:
     build:
@@ -6,8 +45,9 @@ services:
       dockerfile: Dockerfile
     container_name: medical-orchestrator
     restart: unless-stopped
-    ports:
-      - "5000:5000"
+    # Port 5000 is NOT exposed to the host — nginx is the only entry point
+    expose:
+      - "5000"
     volumes:
       - shared-data:/data
       - /var/run/docker.sock:/var/run/docker.sock
@@ -42,6 +82,10 @@ volumes:
   shared-data:
     name: thamani-tinyml_shared-data
     driver: local
+  certbot-webroot:
+    name: thamani-tinyml_certbot-webroot
+  certbot-certs:
+    name: thamani-tinyml_certbot-certs
 
 networks:
   medical-net:

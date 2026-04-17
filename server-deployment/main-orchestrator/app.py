@@ -1,20 +1,28 @@
 """
 Main Orchestrator – Flask API Server
 =====================================
-Receives raw sensor data from medical devices, triggers MATLAB processing,
-and returns the processed risk score.
+Receives raw sensor data from medical devices, triggers MATLAB processing
+asynchronously, and returns the processed risk score.
+
+Job lifecycle
+─────────────
+POST /api/process  → 202 { job_id, status: "processing" }
+GET  /api/jobs/<id>  → { status: "processing" | "completed" | "failed", ... }
+GET  /api/jobs/<id>/model  → binary .tflite model file (when available)
+GET  /api/model/latest     → metadata for the most recent model file
 """
 
 import os
 import json
 import uuid
 import logging
+import threading
 from datetime import datetime, timezone
 
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_file
 from orchestrator import MatlabOrchestrator
 
-# ── Configuration ───────────────────────────────────────────────────────
+# ── Configuration ────────────────────────────────────────────────────────
 app = Flask(__name__, static_folder="static", static_url_path="/static")
 app.config["DATA_PATH"] = os.environ.get("DATA_MOUNT_PATH", "/data")
 
@@ -30,12 +38,67 @@ orchestrator = MatlabOrchestrator(
     data_path=app.config["DATA_PATH"],
 )
 
+# ── In-memory job state store ────────────────────────────────────────────
+# Keyed by job_id. Survives the request but NOT a server restart — completed
+# jobs are also on disk via output.json so the GET endpoint falls back there.
+_jobs: dict = {}
+_jobs_lock = threading.Lock()
 
-# ── Routes ──────────────────────────────────────────────────────────────
+
+def _set_job(job_id: str, data: dict):
+    with _jobs_lock:
+        _jobs[job_id] = data
+
+
+def _get_job(job_id: str) -> dict | None:
+    with _jobs_lock:
+        return _jobs.get(job_id)
+
+
+# ── Background worker ────────────────────────────────────────────────────
+
+def _run_worker(job_id: str):
+    """Runs in a daemon thread. Calls the MATLAB worker and updates job state."""
+    logger.info("Job %s: worker thread started", job_id)
+    try:
+        exit_code = orchestrator.run_worker(job_id)
+
+        if exit_code == 0:
+            result = orchestrator.read_output(job_id)
+            _set_job(job_id, {
+                **_get_job(job_id),
+                "status": "completed",
+                "result": result,
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+            })
+            logger.info("Job %s: completed (risk: %s)", job_id,
+                        result.get("result", {}).get("risk_category", "?"))
+        else:
+            _set_job(job_id, {
+                **_get_job(job_id),
+                "status": "failed",
+                "error": f"Worker exited with code {exit_code}",
+                "failed_at": datetime.now(timezone.utc).isoformat(),
+            })
+            logger.error("Job %s: worker exited %d", job_id, exit_code)
+
+    except Exception as exc:
+        _set_job(job_id, {
+            **_get_job(job_id),
+            "status": "failed",
+            "error": str(exc),
+            "failed_at": datetime.now(timezone.utc).isoformat(),
+        })
+        logger.exception("Job %s: unexpected error in worker thread", job_id)
+
+
+# ── Routes ───────────────────────────────────────────────────────────────
+
 @app.route("/", methods=["GET"])
 def index():
     """Serve the demo dashboard."""
     return app.send_static_file("index.html")
+
 
 @app.route("/api/health", methods=["GET"])
 def health():
@@ -50,7 +113,10 @@ def health():
 @app.route("/api/process", methods=["POST"])
 def process_data():
     """
-    Accept raw sensor data, trigger MATLAB processing, return results.
+    Accept raw sensor data and kick off asynchronous MATLAB processing.
+
+    Returns 202 immediately with a job_id. The client polls
+    GET /api/jobs/<job_id> until status is "completed" or "failed".
 
     Expected JSON payload:
     {
@@ -59,11 +125,11 @@ def process_data():
             "heart_rate": 72,
             "spo2": 98,
             "temperature": 36.6,
-            ...
+            "systolic_bp": 120,
+            "diastolic_bp": 80
         }
     }
     """
-    # ── Validate request ────────────────────────────────────────────────
     if not request.is_json:
         return jsonify({"error": "Content-Type must be application/json"}), 400
 
@@ -74,56 +140,56 @@ def process_data():
     if "sensor_data" not in payload:
         return jsonify({"error": "Missing required field: sensor_data"}), 400
 
-    # ── Create job ──────────────────────────────────────────────────────
     job_id = str(uuid.uuid4())
-    logger.info("Job %s: Received data from device %s", job_id, payload["device_id"])
+    received_at = datetime.now(timezone.utc).isoformat()
+
+    logger.info("Job %s: received from device %s", job_id, payload["device_id"])
 
     job_record = {
         "job_id": job_id,
         "device_id": payload["device_id"],
-        "received_at": datetime.now(timezone.utc).isoformat(),
+        "received_at": received_at,
         "sensor_data": payload["sensor_data"],
     }
 
     try:
-        # Save raw data to shared volume
         orchestrator.save_input(job_id, job_record)
-        logger.info("Job %s: Raw data saved", job_id)
+    except Exception as exc:
+        logger.exception("Job %s: failed to save input", job_id)
+        return jsonify({"error": str(exc), "job_id": job_id}), 500
 
-        # Spin up MATLAB worker and wait for completion
-        logger.info("Job %s: Spinning up MATLAB worker...", job_id)
-        exit_code = orchestrator.run_worker(job_id)
+    # Register job as processing before spawning thread (avoids race)
+    _set_job(job_id, {
+        "status": "processing",
+        "device_id": payload["device_id"],
+        "received_at": received_at,
+    })
 
-        if exit_code != 0:
-            logger.error("Job %s: Worker exited with code %d", job_id, exit_code)
-            return jsonify({
-                "error": "Processing failed",
-                "job_id": job_id,
-                "worker_exit_code": exit_code,
-            }), 500
+    thread = threading.Thread(target=_run_worker, args=(job_id,), daemon=True)
+    thread.start()
 
-        # Read processed results
-        result = orchestrator.read_output(job_id)
-        logger.info("Job %s: Processing complete", job_id)
-
-        return jsonify({
-            "job_id": job_id,
-            "device_id": payload["device_id"],
-            "status": "completed",
-            "result": result,
-        }), 200
-
-    except Exception as e:
-        logger.exception("Job %s: Unexpected error", job_id)
-        return jsonify({
-            "error": str(e),
-            "job_id": job_id,
-        }), 500
+    return jsonify({
+        "job_id": job_id,
+        "status": "processing",
+        "poll_url": f"/api/jobs/{job_id}",
+    }), 202
 
 
 @app.route("/api/jobs/<job_id>", methods=["GET"])
 def get_job(job_id):
-    """Retrieve results for a previously processed job."""
+    """
+    Return current job status. Poll this until status != "processing".
+
+    Response when processing:  { job_id, status: "processing" }
+    Response when completed:   { job_id, status: "completed", result: { ... } }
+    Response when failed:      { job_id, status: "failed", error: "..." }
+    """
+    job = _get_job(job_id)
+
+    if job:
+        return jsonify({"job_id": job_id, **job}), 200
+
+    # Fallback: job survived a server restart — check disk
     try:
         result = orchestrator.read_output(job_id)
         return jsonify({
@@ -135,7 +201,52 @@ def get_job(job_id):
         return jsonify({"error": "Job not found", "job_id": job_id}), 404
 
 
-# ── Entry Point ─────────────────────────────────────────────────────────
+@app.route("/api/jobs/<job_id>/model", methods=["GET"])
+def get_job_model(job_id):
+    """
+    Download the TFLite model file produced by the MATLAB worker for this job.
+    Returns the binary file as an attachment.
+    Used by ESP32 to fetch a new model for on-device inference.
+    """
+    try:
+        model_path = orchestrator.get_model_path(job_id)
+        return send_file(
+            model_path,
+            as_attachment=True,
+            download_name=f"model_{job_id[:8]}.tflite",
+            mimetype="application/octet-stream",
+        )
+    except FileNotFoundError:
+        return jsonify({"error": "No model file for this job", "job_id": job_id}), 404
+
+
+@app.route("/api/model/latest", methods=["GET"])
+def get_latest_model():
+    """
+    Return metadata about the most recently produced model file.
+    ESP32 checks this endpoint to decide whether to download a new model.
+
+    Response: { job_id, model_url, size_bytes, created_at }
+    """
+    try:
+        meta = orchestrator.get_latest_model()
+        return jsonify(meta), 200
+    except FileNotFoundError:
+        return jsonify({"error": "No model available yet"}), 404
+
+
+@app.route("/api/jobs/recent", methods=["GET"])
+def get_recent_jobs():
+    """Retrieve the 5 most recently processed jobs to populate the live dashboard."""
+    try:
+        jobs = orchestrator.get_recent_jobs(limit=5)
+        return jsonify({"recent_jobs": jobs}), 200
+    except Exception:
+        logger.exception("Failed to fetch recent jobs")
+        return jsonify({"error": "Failed to fetch recent jobs"}), 500
+
+
+# ── Entry Point ──────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    logger.info("🏥 Medical Data Orchestrator starting on port 5000")
+    logger.info("Medical Data Orchestrator starting on port 5000")
     app.run(host="0.0.0.0", port=5000, debug=False)
