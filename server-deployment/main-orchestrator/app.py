@@ -130,38 +130,59 @@ def process_data():
         }
     }
     """
-    if not request.is_json:
-        return jsonify({"error": "Content-Type must be application/json"}), 400
-
-    payload = request.get_json()
-
-    if "device_id" not in payload:
-        return jsonify({"error": "Missing required field: device_id"}), 400
-    if "sensor_data" not in payload:
-        return jsonify({"error": "Missing required field: sensor_data"}), 400
-
     job_id = str(uuid.uuid4())
     received_at = datetime.now(timezone.utc).isoformat()
 
-    logger.info("Job %s: received from device %s", job_id, payload["device_id"])
+    if request.is_json:
+        payload = request.get_json()
+        if "device_id" not in payload:
+            return jsonify({"error": "Missing required field: device_id"}), 400
+        if "sensor_data" not in payload:
+            return jsonify({"error": "Missing required field: sensor_data"}), 400
 
-    job_record = {
-        "job_id": job_id,
-        "device_id": payload["device_id"],
-        "received_at": received_at,
-        "sensor_data": payload["sensor_data"],
-    }
+        device_id = payload["device_id"]
+        logger.info("Job %s: received JSON from device %s", job_id, device_id)
 
-    try:
-        orchestrator.save_input(job_id, job_record)
-    except Exception as exc:
-        logger.exception("Job %s: failed to save input", job_id)
-        return jsonify({"error": str(exc), "job_id": job_id}), 500
+        job_record = {
+            "job_id": job_id,
+            "device_id": device_id,
+            "received_at": received_at,
+            "sensor_data": payload["sensor_data"],
+        }
+        try:
+            orchestrator.save_input(job_id, job_record)
+        except Exception as exc:
+            logger.exception("Job %s: failed to save input", job_id)
+            return jsonify({"error": str(exc), "job_id": job_id}), 500
+
+    elif "file" in request.files:
+        device_id = request.form.get("device_id", "UNKNOWN-DEV")
+        logger.info("Job %s: received BINARY file from device %s", job_id, device_id)
+        file_obj = request.files["file"]
+        file_data = file_obj.read()
+        
+        try:
+            # Save the binary data as .bin
+            orchestrator.save_binary_input(job_id, file_data)
+            # Also save input.json with metadata in case the worker needs it
+            job_record = {
+                "job_id": job_id,
+                "device_id": device_id,
+                "received_at": received_at,
+                "sensor_data": "binary_payload"
+            }
+            orchestrator.save_input(job_id, job_record)
+        except Exception as exc:
+            logger.exception("Job %s: failed to save binary input", job_id)
+            return jsonify({"error": str(exc), "job_id": job_id}), 500
+            
+    else:
+        return jsonify({"error": "Request must be application/json or multipart/form-data with 'file'"}), 400
 
     # Register job as processing before spawning thread (avoids race)
     _set_job(job_id, {
         "status": "processing",
-        "device_id": payload["device_id"],
+        "device_id": device_id,
         "received_at": received_at,
     })
 

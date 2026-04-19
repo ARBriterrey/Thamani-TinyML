@@ -49,6 +49,20 @@ class MatlabOrchestrator:
 
         return input_path
 
+    def save_binary_input(self, job_id: str, file_data: bytes) -> str:
+        """Save binary input data to the shared volume."""
+        job_dir = self._job_dir(job_id)
+        os.makedirs(job_dir, exist_ok=True)
+
+        # The worker expects input.bin based on the prompt commentary
+        input_path = os.path.join(job_dir, "input.bin")
+        with open(input_path, "wb") as f:
+            f.write(file_data)
+
+        # We can also write a small info.json if the worker needs metadata,
+        # but storing the .bin is the primary requirement.
+        return input_path
+
     def read_output(self, job_id: str) -> dict:
         """Read processed output from the shared volume."""
         output_path = os.path.join(self._job_dir(job_id), "output.json")
