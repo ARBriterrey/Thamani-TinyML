@@ -9,8 +9,8 @@ UART_HandleTypeDef huart1;
 UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
-// Dummy binary data file structure to simulate a .CDQ file or chunk
-#define CHUNK_SIZE 1024
+// Buffer size must match CHUNK_SIZE_ACTUAL used in the transfer loop
+#define CHUNK_SIZE 2048
 uint8_t dummy_data_buffer[CHUNK_SIZE];
 
 // UART Transmission Flags
