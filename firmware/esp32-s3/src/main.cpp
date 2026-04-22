@@ -12,20 +12,27 @@
 // ==============================================================================
 const char* ssid = "Andy's edge 50 pro";
 const char* password = "Jahanavee";
-const char* serverName = "https://edge.thamanihc.com/api/process";
+
+const char* serverInit = "https://edge.thamanihc.com/api/upload/init";
+const char* serverChunk = "https://edge.thamanihc.com/api/upload/chunk";
+const char* serverFinish = "https://edge.thamanihc.com/api/upload/finish";
 
 // File transfer state
 enum TransferState {
-  WAITING_FOR_START,
-  RECEIVING_DATA,
-  WAITING_FOR_END
+  IDLE,
+  RECEIVING_CHUNK
 };
 
-TransferState state = WAITING_FOR_START;
+TransferState state = IDLE;
 
-uint8_t* psram_buffer = nullptr;
-size_t expected_file_size = 0;
+// Standard SRAM buffer config
+#define CHUNK_BUFFER_SIZE 4096
+uint8_t chunk_buffer[CHUNK_BUFFER_SIZE];
+size_t current_chunk_size = 0;
 size_t bytes_received = 0;
+String current_chunk_crc = "";
+
+String transfer_id = "";
 
 void setup() {
   Serial.begin(115200);
@@ -43,150 +50,184 @@ void setup() {
   Serial.println("\nWiFi connected. IP:");
   Serial.println(WiFi.localIP());
 
-  // Check if PSRAM is available
-  if (psramFound()) {
-    Serial.printf("PSRAM initialized. Total usable PSRAM: %d bytes\n", ESP.getPsramSize());
-  } else {
-    Serial.println("WARNING: PSRAM not found. Large file transfers may fail.");
-  }
-  
-  Serial.println("ESP32-S3 Ready. Waiting for <START_BIN:size> over UART2...");
+  Serial.println("ESP32 Ready. Waiting for chunk commands over UART2...");
 }
 
-// Function to perform the HTTP Multipart Data Upload
-void uploadFileToCloud(uint8_t* payload, size_t payload_size) {
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("WiFi not connected. Cannot upload.");
-    return;
-  }
+// -------------------------------------------------------------
+// Cloud API Methods
+// -------------------------------------------------------------
+
+bool initCloudTransfer() {
+  if (WiFi.status() != WL_CONNECTED) return false;
   
   WiFiClientSecure client;
-  client.setInsecure(); // Let's Encrypt certificates are trusted by ignoring server checks or you can provide setCACert
+  client.setInsecure();
   client.setCertificate(client_cert);
   client.setPrivateKey(client_priv_key);
 
   HTTPClient http;
-  http.begin(client, serverName);
+  http.begin(client, serverInit);
+  http.addHeader("Content-Type", "application/json");
+
+  int httpCode = http.POST("{\"device_id\":\"ESP32-HARDWARE\"}");
+  bool success = false;
+  if (httpCode == 200 || httpCode == 202) {
+    String resp = http.getString();
+    // basic parsing for transfer_id
+    int idx = resp.indexOf("\"transfer_id\":\"");
+    if (idx > 0) {
+      idx += 15;
+      int endIdx = resp.indexOf("\"", idx);
+      transfer_id = resp.substring(idx, endIdx);
+      success = true;
+      Serial.println("Init successful. Transfer ID: " + transfer_id);
+    }
+  } else {
+    Serial.printf("Init POST Error: %d %s\n", httpCode, http.getString().c_str());
+  }
+  http.end();
+  return success;
+}
+
+bool uploadChunkToCloud() {
+  if (WiFi.status() != WL_CONNECTED) return false;
+  
+  WiFiClientSecure client;
+  client.setInsecure();
+  client.setCertificate(client_cert);
+  client.setPrivateKey(client_priv_key);
+
+  HTTPClient http;
+  http.begin(client, serverChunk);
 
   String boundary = "----ESP32Boundary" + String(millis());
   http.addHeader("Content-Type", "multipart/form-data; boundary=" + boundary);
 
   String bodyStart = "--" + boundary + "\r\n";
-  bodyStart += "Content-Disposition: form-data; name=\"device_id\"\r\n\r\n";
-  bodyStart += "ESP32-S3-HARDWARE\r\n";
+  bodyStart += "Content-Disposition: form-data; name=\"transfer_id\"\r\n\r\n";
+  bodyStart += transfer_id + "\r\n";
   bodyStart += "--" + boundary + "\r\n";
-  bodyStart += "Content-Disposition: form-data; name=\"file\"; filename=\"upload.bin\"\r\n";
+  bodyStart += "Content-Disposition: form-data; name=\"crc32\"\r\n\r\n";
+  bodyStart += current_chunk_crc + "\r\n";
+  bodyStart += "--" + boundary + "\r\n";
+  bodyStart += "Content-Disposition: form-data; name=\"file\"; filename=\"chunk.bin\"\r\n";
   bodyStart += "Content-Type: application/octet-stream\r\n\r\n";
   
   String bodyEnd = "\r\n--" + boundary + "--\r\n";
 
-  size_t totalLength = bodyStart.length() + payload_size + bodyEnd.length();
-  
-  WiFiClient* stream = http.getStreamPtr();
-  int httpResponseCode = 0;
-  
-  Serial.println("Starting multipart POST...");
-  
-  // Connect explicitly to send using chunked/streamed payload safely 
-  // For multipart, it's safer to pre-allocate memory and send directly if it's in PSRAM, 
-  // but HTTPClient has limitations on huge memory blocks over single String.
-  // Instead, we will construct a continuous byte array.
-  
-  uint8_t* full_post = (uint8_t*)ps_malloc(totalLength);
+  size_t totalLength = bodyStart.length() + current_chunk_size + bodyEnd.length();
+  uint8_t* full_post = (uint8_t*)malloc(totalLength);
   if (!full_post) {
-      Serial.println("Failed to allocate PSRAM for POST request.");
-      http.end();
-      return;
+      Serial.println("Failed to allocate RAM for multipart request.");
+      return false;
   }
   
   memcpy(full_post, bodyStart.c_str(), bodyStart.length());
-  memcpy(full_post + bodyStart.length(), payload, payload_size);
-  memcpy(full_post + bodyStart.length() + payload_size, bodyEnd.c_str(), bodyEnd.length());
+  memcpy(full_post + bodyStart.length(), chunk_buffer, current_chunk_size);
+  memcpy(full_post + bodyStart.length() + current_chunk_size, bodyEnd.c_str(), bodyEnd.length());
   
-  httpResponseCode = http.POST(full_post, totalLength);
-
-  if (httpResponseCode > 0) {
-    String response = http.getString();
-    Serial.printf("<<< HTTP Response code: %d\n", httpResponseCode);
-    Serial.println("<<< Payload Received:");
-    Serial.println(response);
-    
-    // Relay to STM32
-    Serial2.print("<RESPONSE:");
-    Serial2.print(response);
-    Serial2.print(">");
-  } else {
-    Serial.printf("<<< HTTP POST Error: %d %s\n", httpResponseCode, http.errorToString(httpResponseCode).c_str());
-    Serial2.print("<ERROR:SERVER_FAILED>");
+  int httpCode = http.POST(full_post, totalLength);
+  bool success = (httpCode == 200 || httpCode == 202);
+  if (!success) {
+      Serial.printf("Chunk POST Error: %d %s\n", httpCode, http.getString().c_str());
   }
-
+  
   free(full_post);
   http.end();
+  return success;
 }
 
+bool finishCloudTransfer(String total_crc, String &responseBody) {
+  if (WiFi.status() != WL_CONNECTED) return false;
+  
+  WiFiClientSecure client;
+  client.setInsecure();
+  client.setCertificate(client_cert);
+  client.setPrivateKey(client_priv_key);
+
+  HTTPClient http;
+  http.begin(client, serverFinish);
+  http.addHeader("Content-Type", "application/json");
+
+  String payload = "{\"transfer_id\":\"" + transfer_id + "\",\"total_crc32\":\"" + total_crc + "\"}";
+  int httpCode = http.POST(payload);
+  
+  bool success = false;
+  if (httpCode == 200 || httpCode == 202) {
+    success = true;
+    responseBody = http.getString();
+  } else {
+    Serial.printf("Finish POST Error: %d %s\n", httpCode, http.getString().c_str());
+  }
+  http.end();
+  return success;
+}
+
+// -------------------------------------------------------------
+// Main Loop
+// -------------------------------------------------------------
+
 void loop() {
-  if (state == WAITING_FOR_START) {
+  if (state == IDLE) {
     if (Serial2.available()) {
       String marker = Serial2.readStringUntil('>');
-      if (marker.startsWith("<START_BIN:")) {
-        String sizeStr = marker.substring(11);
-        expected_file_size = sizeStr.toInt();
-        
-        Serial.printf("\n--- File Transfer Started: %d bytes expected ---\n", expected_file_size);
-        
-        if (psram_buffer != nullptr) {
-          free(psram_buffer);
-        }
-        
-        psram_buffer = (uint8_t*)ps_malloc(expected_file_size);
-        if (psram_buffer == nullptr) {
-          Serial.println("ERROR: Could not allocate PSRAM for file.");
-          Serial2.print("<ERROR:MEM>");
-          // Fallback, drain buffer to avoid hang
+      
+      if (marker.startsWith("<INIT:")) {
+        Serial.println("Received INIT");
+        if (initCloudTransfer()) {
+          Serial2.print("<ACK_INIT>");
         } else {
-          bytes_received = 0;
-          state = RECEIVING_DATA;
+          Serial2.print("<NACK_INIT>");
+        }
+      } 
+      else if (marker.startsWith("<CHUNK:")) {
+        // Format: <CHUNK:size:crc>
+        int firstColon = marker.indexOf(':');
+        int secondColon = marker.indexOf(':', firstColon + 1);
+        
+        if (firstColon > 0 && secondColon > 0) {
+          String sizeStr = marker.substring(firstColon + 1, secondColon);
+          current_chunk_crc = marker.substring(secondColon + 1);
+          current_chunk_size = sizeStr.toInt();
           
-          // Ack to STM32 to start streaming raw bytes
-          Serial2.print("<ACK_START>");
+          if (current_chunk_size <= CHUNK_BUFFER_SIZE) {
+            bytes_received = 0;
+            state = RECEIVING_CHUNK;
+            Serial.printf("Receiving CHUNK size: %d, crc: %s\n", current_chunk_size, current_chunk_crc.c_str());
+            Serial2.print("<READY>"); // Tell STM32 to send raw bytes
+          } else {
+             Serial2.print("<NACK_CHUNK_SIZE>");
+          }
+        }
+      }
+      else if (marker.startsWith("<FINISH:")) {
+        String total_crc = marker.substring(8);
+        Serial.println("Received FINISH, total CRC: " + total_crc);
+        String serverResponse;
+        if (finishCloudTransfer(total_crc, serverResponse)) {
+            Serial2.print("<ACK_FINISH:");
+            Serial2.print(serverResponse);
+            Serial2.print(">");
+        } else {
+            Serial2.print("<NACK_FINISH>");
         }
       }
     }
   } 
-  else if (state == RECEIVING_DATA) {
-    while (Serial2.available()) {
-      psram_buffer[bytes_received++] = Serial2.read();
-      
-      // Print progress
-      if (bytes_received % 102400 == 0) {
-        Serial.printf("Received %d / %d bytes...\n", bytes_received, expected_file_size);
-      }
-      
-      if (bytes_received >= expected_file_size) {
-        state = WAITING_FOR_END;
-        Serial.println("All bytes received, waiting for <END_BIN> marker.");
-        break;
-      }
+  else if (state == RECEIVING_CHUNK) {
+    while (Serial2.available() && bytes_received < current_chunk_size) {
+      chunk_buffer[bytes_received++] = Serial2.read();
     }
-  } 
-  else if (state == WAITING_FOR_END) {
-    if (Serial2.available()) {
-      String endMarker = Serial2.readStringUntil('>');
-      if (endMarker.indexOf("<END_BIN") >= 0) {
-        Serial.println("--- End Transfer Marker Received ---");
-        
-        // Initiate Upload
-        uploadFileToCloud(psram_buffer, expected_file_size);
-        
-        // Reset state
-        free(psram_buffer);
-        psram_buffer = nullptr;
-        expected_file_size = 0;
-        state = WAITING_FOR_START;
-        Serial.println("\nWaiting for next transfer...");
+    
+    if (bytes_received >= current_chunk_size) {
+      // We have the full chunk, now push it
+      Serial.println("Chunk downloaded from STM32, pushing to cloud...");
+      if (uploadChunkToCloud()) {
+        Serial2.print("<ACK_CHUNK>");
       } else {
-         Serial.println("Warning: End marker garbled, attempting recovery...");
+        Serial2.print("<NACK_CHUNK>");
       }
+      state = IDLE;
     }
   }
 }

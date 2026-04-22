@@ -63,6 +63,29 @@ class MatlabOrchestrator:
         # but storing the .bin is the primary requirement.
         return input_path
 
+    def init_binary_upload(self, job_id: str) -> str:
+        """Initialize an empty binary file for chunked upload."""
+        job_dir = self._job_dir(job_id)
+        os.makedirs(job_dir, exist_ok=True)
+        input_path = os.path.join(job_dir, "input.bin")
+        with open(input_path, "wb") as f:
+            pass # Create empty file
+        return input_path
+
+    def append_binary_chunk(self, job_id: str, chunk_data: bytes) -> str:
+        """Append a chunk of binary data to the job's input.bin."""
+        job_dir = self._job_dir(job_id)
+        input_path = os.path.join(job_dir, "input.bin")
+        if not os.path.exists(input_path):
+            raise FileNotFoundError(f"Transfer {job_id} not initialized.")
+        with open(input_path, "ab") as f:
+            f.write(chunk_data)
+        return input_path
+
+    def get_binary_path(self, job_id: str) -> str:
+        """Return path to the input.bin file."""
+        return os.path.join(self._job_dir(job_id), "input.bin")
+
     def read_output(self, job_id: str) -> dict:
         """Read processed output from the shared volume."""
         output_path = os.path.join(self._job_dir(job_id), "output.json")

@@ -196,6 +196,100 @@ def process_data():
     }), 202
 
 
+@app.route("/api/upload/init", methods=["POST"])
+def upload_init():
+    """Initialize a chunked file transfer."""
+    job_id = str(uuid.uuid4())
+    received_at = datetime.now(timezone.utc).isoformat()
+    device_id = request.json.get("device_id", "UNKNOWN-DEV") if request.is_json else "UNKNOWN-DEV"
+    
+    try:
+        orchestrator.init_binary_upload(job_id)
+        job_record = {
+            "job_id": job_id,
+            "device_id": device_id,
+            "received_at": received_at,
+            "sensor_data": "binary_payload_chunked"
+        }
+        orchestrator.save_input(job_id, job_record)
+        
+        _set_job(job_id, {
+            "status": "uploading",
+            "device_id": device_id,
+            "received_at": received_at,
+        })
+        return jsonify({"transfer_id": job_id}), 200
+    except Exception as exc:
+        logger.exception("Failed to init transfer")
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/api/upload/chunk", methods=["POST"])
+def upload_chunk():
+    """Accept a chunk of a binary file and append it."""
+    import zlib
+    if "file" not in request.files:
+        return jsonify({"error": "Missing file chunk"}), 400
+        
+    transfer_id = request.form.get("transfer_id")
+    expected_crc = request.form.get("crc32")
+    
+    if not transfer_id:
+        return jsonify({"error": "Missing transfer_id"}), 400
+        
+    chunk_data = request.files["file"].read()
+    
+    # Optional CRC32 check if provided
+    if expected_crc:
+        actual_crc = zlib.crc32(chunk_data) & 0xFFFFFFFF
+        if str(actual_crc) != expected_crc:
+            return jsonify({"error": f"CRC mismatch. Expected {expected_crc}, got {actual_crc}"}), 400
+            
+    try:
+        orchestrator.append_binary_chunk(transfer_id, chunk_data)
+        return jsonify({"status": "chunk appended"}), 200
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/api/upload/finish", methods=["POST"])
+def upload_finish():
+    """Finalize the upload, perform whole file CRC if provided, and trigger processing."""
+    import zlib
+    payload = request.get_json() or {}
+    transfer_id = payload.get("transfer_id")
+    total_crc = payload.get("total_crc32")
+    
+    if not transfer_id:
+        return jsonify({"error": "Missing transfer_id"}), 400
+        
+    # Verify total CRC if provided
+    try:
+        if total_crc:
+            file_path = orchestrator.get_binary_path(transfer_id)
+            with open(file_path, "rb") as f:
+                actual_crc = zlib.crc32(f.read()) & 0xFFFFFFFF
+                if str(actual_crc) != total_crc:
+                    return jsonify({"error": f"Total file CRC mismatch. Expected {total_crc}, got {actual_crc}"}), 400
+                    
+        # Mark as processing and spawn thread
+        job = _get_job(transfer_id)
+        if job:
+            _set_job(transfer_id, {**job, "status": "processing"})
+            
+        thread = threading.Thread(target=_run_worker, args=(transfer_id,), daemon=True)
+        thread.start()
+        
+        return jsonify({
+            "job_id": transfer_id,
+            "status": "processing",
+            "poll_url": f"/api/jobs/{transfer_id}",
+        }), 202
+        
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
 @app.route("/api/jobs/<job_id>", methods=["GET"])
 def get_job(job_id):
     """

@@ -53,38 +53,36 @@ int main(void)
   while (1)
   {
     // We will simulate sending a 2MB (2097152 bytes) ".bin" file.
-    // 2097152 / 1024 (CHUNK_SIZE) = 2048 chunks
+    // Let's use 2048 byte chunks now to match the ESP32 buffer
     const uint32_t TOTAL_FILE_SIZE = 2097152;
-    const uint32_t TOTAL_CHUNKS = TOTAL_FILE_SIZE / CHUNK_SIZE;
+    const uint32_t CHUNK_SIZE_ACTUAL = 2048;
+    const uint32_t TOTAL_CHUNKS = TOTAL_FILE_SIZE / CHUNK_SIZE_ACTUAL;
 
     char tx_start_msg[64];
-    snprintf(tx_start_msg, sizeof(tx_start_msg), "<START_BIN:%lu>", TOTAL_FILE_SIZE);
+    snprintf(tx_start_msg, sizeof(tx_start_msg), "<INIT:%lu>", TOTAL_FILE_SIZE);
     
     char debug_start_msg[] = "\r\nInitiating 2MB File Transfer to ESP32...\r\n";
     HAL_UART_Transmit(&huart2, (uint8_t*)debug_start_msg, strlen(debug_start_msg), HAL_MAX_DELAY);
     
-    // 1. Send Start Marker to ESP32
+    // 1. Send INIT to ESP32
     HAL_UART_Transmit(&huart1, (uint8_t*)tx_start_msg, strlen(tx_start_msg), HAL_MAX_DELAY);
 
-    // 2. Wait for <ACK_START> from ESP32 (Timeout 5 seconds)
+    // 2. Wait for <ACK_INIT> from ESP32
     uint8_t rx_byte = 0;
-    char rx_buf[32] = {0};
+    char rx_buf[128] = {0};
     int rx_idx = 0;
     uint32_t start_tick = HAL_GetTick();
     uint8_t ack_received = 0;
 
-    char wait_msg[] = "Waiting for ACK...\r\n";
-    HAL_UART_Transmit(&huart2, (uint8_t*)wait_msg, strlen(wait_msg), HAL_MAX_DELAY);
-
-    while (HAL_GetTick() - start_tick < 5000) {
+    while (HAL_GetTick() - start_tick < 10000) {
         if (HAL_UART_Receive(&huart1, &rx_byte, 1, 10) == HAL_OK) {
             if (rx_byte == '>') {
                 rx_buf[rx_idx] = '\0';
-                if (strstr(rx_buf, "<ACK_START") != NULL) {
+                if (strstr(rx_buf, "<ACK_INIT") != NULL) {
                     ack_received = 1;
                     break;
                 }
-                rx_idx = 0; // Reset for next tag
+                rx_idx = 0;
             } else if (rx_idx < sizeof(rx_buf) - 1) {
                 rx_buf[rx_idx++] = rx_byte;
             }
@@ -92,54 +90,120 @@ int main(void)
     }
 
     if (!ack_received) {
-        char err_msg[] = "Failed to receive ACK_START. Retrying in 5s...\r\n";
+        char err_msg[] = "Failed to receive ACK_INIT. Retrying in 5s...\r\n";
         HAL_UART_Transmit(&huart2, (uint8_t*)err_msg, strlen(err_msg), HAL_MAX_DELAY);
         HAL_Delay(5000);
         continue;
     }
 
-    char sending_msg[] = "ACK received. Streaming 2048 chunks...\r\n";
+    char sending_msg[] = "ACK_INIT received. Streaming chunks...\r\n";
     HAL_UART_Transmit(&huart2, (uint8_t*)sending_msg, strlen(sending_msg), HAL_MAX_DELAY);
 
     // 3. Stream the file in chunks
+    uint32_t total_computed_crc = 0; // Simple accumulated dummy CRC for this example
+    
     for (uint32_t i = 0; i < TOTAL_CHUNKS; i++) {
-        // Regenerate variations in data logic (optional, for realism)
         Generate_Dummy_Binary_Data(); 
         
-        if (HAL_UART_Transmit(&huart1, dummy_data_buffer, CHUNK_SIZE, 1000) != HAL_OK) {
-            char chunk_err[] = "Chunk TX Error!\r\n";
-            HAL_UART_Transmit(&huart2, (uint8_t*)chunk_err, strlen(chunk_err), HAL_MAX_DELAY);
-            break;
+        // Software CRC32 calculation (simplified dummy for now, replace with hardware CRC)
+        uint32_t chunk_crc = 0;
+        for (int b = 0; b < CHUNK_SIZE_ACTUAL; b++) {
+            chunk_crc += dummy_data_buffer[b];
+        }
+        total_computed_crc += chunk_crc;
+        
+        uint8_t chunk_success = 0;
+        int retries = 0;
+        
+        while (!chunk_success && retries < 3) {
+            char tx_chunk_msg[64];
+            snprintf(tx_chunk_msg, sizeof(tx_chunk_msg), "<CHUNK:%lu:%lu>", CHUNK_SIZE_ACTUAL, chunk_crc);
+            HAL_UART_Transmit(&huart1, (uint8_t*)tx_chunk_msg, strlen(tx_chunk_msg), HAL_MAX_DELAY);
+            
+            // Wait for <READY>
+            start_tick = HAL_GetTick();
+            rx_idx = 0;
+            uint8_t ready = 0;
+            while (HAL_GetTick() - start_tick < 5000) {
+                if (HAL_UART_Receive(&huart1, &rx_byte, 1, 10) == HAL_OK) {
+                    if (rx_byte == '>') {
+                        rx_buf[rx_idx] = '\0';
+                        if (strstr(rx_buf, "<READY") != NULL) {
+                            ready = 1;
+                            break;
+                        }
+                        rx_idx = 0;
+                    } else if (rx_idx < sizeof(rx_buf) - 1) {
+                        rx_buf[rx_idx++] = rx_byte;
+                    }
+                }
+            }
+            
+            if (ready) {
+                HAL_UART_Transmit(&huart1, dummy_data_buffer, CHUNK_SIZE_ACTUAL, 2000);
+                
+                // Wait for <ACK_CHUNK>
+                start_tick = HAL_GetTick();
+                rx_idx = 0;
+                while (HAL_GetTick() - start_tick < 15000) { // Server upload can take seconds
+                    if (HAL_UART_Receive(&huart1, &rx_byte, 1, 10) == HAL_OK) {
+                        if (rx_byte == '>') {
+                            rx_buf[rx_idx] = '\0';
+                            if (strstr(rx_buf, "<ACK_CHUNK") != NULL) {
+                                chunk_success = 1;
+                                break;
+                            }
+                            if (strstr(rx_buf, "<NACK_CHUNK") != NULL) {
+                                break; // NACK received, retry
+                            }
+                            rx_idx = 0;
+                        } else if (rx_idx < sizeof(rx_buf) - 1) {
+                            rx_buf[rx_idx++] = rx_byte;
+                        }
+                    }
+                }
+            }
+            
+            if (!chunk_success) {
+                retries++;
+                char retry_msg[] = "Chunk failed. Retrying...\r\n";
+                HAL_UART_Transmit(&huart2, (uint8_t*)retry_msg, strlen(retry_msg), HAL_MAX_DELAY);
+            }
         }
 
-        if (i % 256 == 0) { // Print debug every 256KB
+        if (!chunk_success) {
+             char err[] = "Max retries reached. Aborting.\r\n";
+             HAL_UART_Transmit(&huart2, (uint8_t*)err, strlen(err), HAL_MAX_DELAY);
+             break;
+        }
+
+        if (i % 64 == 0) { // Print debug every 64 chunks
             char status[32];
-            snprintf(status, sizeof(status), "Sent %lu / 2048 chunks\r\n", i);
+            snprintf(status, sizeof(status), "Sent %lu / %lu chunks\r\n", i, TOTAL_CHUNKS);
             HAL_UART_Transmit(&huart2, (uint8_t*)status, strlen(status), HAL_MAX_DELAY);
         }
     }
 
     // 4. Send End Marker
-    char tx_end_msg[] = "<END_BIN>";
+    char tx_end_msg[64];
+    snprintf(tx_end_msg, sizeof(tx_end_msg), "<FINISH:%lu>", total_computed_crc);
     HAL_UART_Transmit(&huart1, (uint8_t*)tx_end_msg, strlen(tx_end_msg), HAL_MAX_DELAY);
 
-    char done_msg[] = "Transfer Complete. Waiting for Server Response...\r\n";
+    char done_msg[] = "Transfer Complete. Waiting for FINISH response...\r\n";
     HAL_UART_Transmit(&huart2, (uint8_t*)done_msg, strlen(done_msg), HAL_MAX_DELAY);
 
     // 5. Wait for Response from ESP32 (Timeout 30s)
     rx_idx = 0;
     memset(rx_buf, 0, sizeof(rx_buf));
     start_tick = HAL_GetTick();
-    uint8_t resp_received = 0;
 
     while (HAL_GetTick() - start_tick < 30000) {
         if (HAL_UART_Receive(&huart1, &rx_byte, 1, 10) == HAL_OK) {
             if (rx_byte == '>') {
                 rx_buf[rx_idx] = '\0';
-                if (strstr(rx_buf, "<RESPONSE:") != NULL || strstr(rx_buf, "<ERROR:") != NULL) {
-                    resp_received = 1;
-                    char resp_msg[128];
-                    snprintf(resp_msg, sizeof(resp_msg), "ESP32 says: %s>\r\n", rx_buf);
+                if (strstr(rx_buf, "<ACK_FINISH:") != NULL || strstr(rx_buf, "<NACK_FINISH") != NULL) {
+                    char resp_msg[256];
+                    snprintf(resp_msg, sizeof(resp_msg), "ESP32 replies: %s>\r\n", rx_buf);
                     HAL_UART_Transmit(&huart2, (uint8_t*)resp_msg, strlen(resp_msg), HAL_MAX_DELAY);
                     break;
                 }
@@ -150,16 +214,8 @@ int main(void)
         }
     }
 
-    if (!resp_received) {
-        char timeout_msg[] = "Server response timeout.\r\n";
-        HAL_UART_Transmit(&huart2, (uint8_t*)timeout_msg, strlen(timeout_msg), HAL_MAX_DELAY);
-    }
-
     // Wait 15 seconds before sending the next file
     HAL_Delay(15000);
-    /* USER CODE END WHILE */
-
-    /* USER CODE BEGIN 3 */
   }
   /* USER CODE END 3 */
 }
