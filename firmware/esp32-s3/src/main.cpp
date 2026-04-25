@@ -61,8 +61,8 @@ bool initCloudTransfer() {
   if (WiFi.status() != WL_CONNECTED) return false;
   
   WiFiClientSecure client;
-  client.setInsecure();
-  client.setCertificate(client_cert);
+  client.setCACert(server_ca_cert);      // Verify server cert against ISRG Root X1
+  client.setCertificate(client_cert);   // Present device client cert (mTLS)
   client.setPrivateKey(client_priv_key);
 
   HTTPClient http;
@@ -93,8 +93,8 @@ bool uploadChunkToCloud() {
   if (WiFi.status() != WL_CONNECTED) return false;
   
   WiFiClientSecure client;
-  client.setInsecure();
-  client.setCertificate(client_cert);
+  client.setCACert(server_ca_cert);      // Verify server cert against ISRG Root X1
+  client.setCertificate(client_cert);   // Present device client cert (mTLS)
   client.setPrivateKey(client_priv_key);
 
   HTTPClient http;
@@ -141,8 +141,8 @@ bool finishCloudTransfer(String total_crc, String &responseBody) {
   if (WiFi.status() != WL_CONNECTED) return false;
   
   WiFiClientSecure client;
-  client.setInsecure();
-  client.setCertificate(client_cert);
+  client.setCACert(server_ca_cert);      // Verify server cert against ISRG Root X1
+  client.setCertificate(client_cert);   // Present device client cert (mTLS)
   client.setPrivateKey(client_priv_key);
 
   HTTPClient http;
