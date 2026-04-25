@@ -1,20 +1,15 @@
-FROM python:3.11-slim
+FROM mathworks/matlab-runtime:r2021a
 
-# ┌─────────────────────────────────────────────────────────────────────┐
-# │  PLACEHOLDER IMAGE                                                   │
-# │                                                                       │
-# │  Replace this with your MATLAB Runtime image when ready:              │
-# │    FROM mathworks/matlab-runtime:r2024a                               │
-# │                                                                       │
-# │  And replace process.py with your compiled MATLAB executable:         │
-# │    COPY my_risk_scorer /app/my_risk_scorer                            │
-# │    CMD ["/app/my_risk_scorer"]                                        │
-# └─────────────────────────────────────────────────────────────────────┘
+# Install Python to run the process.py wrapper
+USER root
+RUN apt-get update && \
+    apt-get install -y python3 python3-pip && \
+    rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip3 install --no-cache-dir -r requirements.txt
 
 COPY . .
 

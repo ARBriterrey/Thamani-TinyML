@@ -27,6 +27,7 @@ import sys
 import json
 import struct
 import logging
+import subprocess
 from datetime import datetime, timezone
 
 logging.basicConfig(
@@ -263,30 +264,55 @@ def main():
     logger.info("Source: %s | Parameters: %d", source, len(sensor_data))
 
     # ------------------------------------------------------------------
-    # Process — placeholder risk score (or call MATLAB here)
+    # Process — Call compiled MATLAB executable
     # ------------------------------------------------------------------
-    logger.info("Running risk scoring algorithm...")
-    result = compute_risk_score(sensor_data)
+    logger.info("Running MATLAB processing algorithm...")
+    
+    matlab_output_path = os.path.join(job_dir, "matlab_output.json")
+    txt_input_path = os.path.join(job_dir, "input.txt")
+    
+    executable_path = "/app/thamani_processor"
+    
+    try:
+        # Call the standalone MATLAB executable
+        # Usage: ./thromani_processor <input_file> <output_file>
+        subprocess.run(
+            [executable_path, txt_input_path, matlab_output_path],
+            check=True,
+            capture_output=True,
+            text=True
+        )
+        logger.info("MATLAB processing complete.")
+    except subprocess.CalledProcessError as e:
+        logger.error(f"MATLAB execution failed: {e.stderr}")
+        sys.exit(1)
+    except FileNotFoundError:
+        logger.error(f"MATLAB executable not found at {executable_path}")
+        sys.exit(1)
 
     # ------------------------------------------------------------------
     # Write output.json
     # ------------------------------------------------------------------
-    output = {
-        "job_id":            job_id,
-        "source":            source,
-        "processed_at":      datetime.now(timezone.utc).isoformat(),
-        "processing_engine": processing_engine,
-        "sensor_summary":    sensor_data,
-        "result":            result,
-    }
+    try:
+        with open(matlab_output_path, "r") as f:
+            matlab_results = json.load(f)
+    except Exception as e:
+        logger.error(f"Failed to read MATLAB output: {e}")
+        sys.exit(1)
 
+    # Output strictly the format STM32 expects:
+    # {"results":{"sysL":110,"sysH":120,...}}
+    
     output_path = os.path.join(job_dir, "output.json")
     with open(output_path, "w") as f:
-        json.dump(output, f, indent=2)
+        json.dump(matlab_results, f, separators=(',', ':'))
 
+    # Also log a summary
+    res = matlab_results.get("results", {})
     logger.info(
-        "✅ Job %s complete — Source: %s | Risk: %s (score: %.1f)",
-        job_id, source, result["risk_category"], result["risk_score"],
+        "✅ Job %s complete — sys: %s/%s, Dia: %s/%s, MAP: %s/%s, PP: %s/%s, diagnosis: %s",
+        job_id, res.get("sysL"), res.get("sysH"), res.get("DiaL"), res.get("DiaH"),
+        res.get("MAPL"), res.get("MAPH"), res.get("PPL"), res.get("PPH"), res.get("diagnosis")
     )
     sys.exit(0)
 
