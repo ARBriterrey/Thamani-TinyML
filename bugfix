@@ -1,0 +1,14 @@
+#modify this for CRC mismatch issue
+    if expected_crc:
+        actual_crc = zlib.crc32(chunk_data) & 0xFFFFFFFF
+        try:
+            expected_crc_int = int(expected_crc, 16)          # parse hex string
+        except ValueError:
+            return jsonify({"error": f"Invalid crc32 format: {expected_crc!r}"}), 400
+
+        if actual_crc != expected_crc_int:
+            return jsonify({
+                "error":    "CRC mismatch",
+                "expected": expected_crc.upper(),
+                "actual":   f"{actual_crc:08X}",
+            }), 400
