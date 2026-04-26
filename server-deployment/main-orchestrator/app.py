@@ -272,22 +272,39 @@ def upload_finish():
                 if str(actual_crc) != total_crc:
                     return jsonify({"error": f"Total file CRC mismatch. Expected {total_crc}, got {actual_crc}"}), 400
                     
-        # Mark as processing and spawn thread
+        # Synchronous processing for edge devices expecting immediate results
+        logger.info("Job %s: starting synchronous worker", transfer_id)
+        
+        # Mark as processing in memory (though we'll return shortly)
         job = _get_job(transfer_id)
         if job:
             _set_job(transfer_id, {**job, "status": "processing"})
             
-        thread = threading.Thread(target=_run_worker, args=(transfer_id,), daemon=True)
-        thread.start()
+        exit_code = orchestrator.run_worker(transfer_id)
         
-        return jsonify({
-            "job_id": transfer_id,
-            "status": "processing",
-            "poll_url": f"/api/jobs/{transfer_id}",
-        }), 202
-        
+        if exit_code == 0:
+            result = orchestrator.read_output(transfer_id)
+            _set_job(transfer_id, {
+                **_get_job(transfer_id),
+                "status": "completed",
+                "result": result,
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+            })
+            # RETURN THE EXACT JSON THE STM32 EXPECTS
+            return jsonify(result), 200
+        else:
+            _set_job(transfer_id, {
+                **_get_job(transfer_id),
+                "status": "failed",
+                "error": f"Worker exited with code {exit_code}",
+                "failed_at": datetime.now(timezone.utc).isoformat(),
+            })
+            return jsonify({"error": f"Processing failed with exit code {exit_code}"}), 500
+            
     except Exception as exc:
+        logger.exception("Finalization failed")
         return jsonify({"error": str(exc)}), 500
+
 
 
 @app.route("/api/jobs/<job_id>", methods=["GET"])

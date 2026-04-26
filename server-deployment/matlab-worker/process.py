@@ -283,22 +283,15 @@ def main():
             text=True
         )
         logger.info("MATLAB processing complete.")
-    except subprocess.CalledProcessError as e:
-        logger.error(f"MATLAB execution failed: {e.stderr}")
-        sys.exit(1)
-    except FileNotFoundError:
-        logger.error(f"MATLAB executable not found at {executable_path}")
-        sys.exit(1)
-
-    # ------------------------------------------------------------------
-    # Write output.json
-    # ------------------------------------------------------------------
-    try:
+        
         with open(matlab_output_path, "r") as f:
             matlab_results = json.load(f)
+            
     except Exception as e:
-        logger.error(f"Failed to read MATLAB output: {e}")
+        logger.error(f"MATLAB processing failed: {e}")
         sys.exit(1)
+
+
 
     # Output strictly the format STM32 expects:
     # {"results":{"sysL":110,"sysH":120,...}}
