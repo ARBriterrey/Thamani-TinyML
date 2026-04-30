@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { Activity, Server, FileText, Database, Play, AlertCircle } from 'lucide-react';
 import { format } from 'date-fns';
 
-const API_URL = 'http://localhost:5000/api';
+const API_URL = import.meta.env.VITE_API_URL || 'https://edge.thamanihc.com/api';
 
 function App() {
   const [logs, setLogs] = useState([]);
