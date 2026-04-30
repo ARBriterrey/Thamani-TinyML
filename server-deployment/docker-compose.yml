@@ -47,9 +47,9 @@ services:
       dockerfile: Dockerfile
     container_name: medical-orchestrator
     restart: unless-stopped
-    # Port 5000 is NOT exposed to the host — nginx is the only entry point
-    expose:
-      - "5000"
+    # Port 5000 is exposed to the host for testing
+    ports:
+      - "5000:5000"
     volumes:
       - shared-data:/data
       - /var/run/docker.sock:/var/run/docker.sock

@@ -20,16 +20,37 @@ import threading
 from datetime import datetime, timezone
 
 from flask import Flask, request, jsonify, send_file
+from flask_cors import CORS
 from orchestrator import MatlabOrchestrator
 
 # ── Configuration ────────────────────────────────────────────────────────
 app = Flask(__name__, static_folder="static", static_url_path="/static")
+CORS(app)  # Enable CORS for the dashboard
 app.config["DATA_PATH"] = os.environ.get("DATA_MOUNT_PATH", "/data")
+
+import collections
+log_buffer = collections.deque(maxlen=200)
+
+class MemoryLogHandler(logging.Handler):
+    def emit(self, record):
+        log_entry = self.format(record)
+        log_buffer.appendleft({
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "level": record.levelname,
+            "message": log_entry
+        })
 
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
+    format="%(message)s",
 )
+logger = logging.getLogger()
+
+memory_handler = MemoryLogHandler()
+memory_handler.setFormatter(logging.Formatter("%(message)s"))
+logger.addHandler(memory_handler)
+
+# Get the specific app logger
 logger = logging.getLogger(__name__)
 
 orchestrator = MatlabOrchestrator(
@@ -108,6 +129,11 @@ def health():
         "service": "medical-data-orchestrator",
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }), 200
+
+@app.route("/api/logs", methods=["GET"])
+def get_logs():
+    """Returns the most recent server logs."""
+    return jsonify({"logs": list(log_buffer)}), 200
 
 
 @app.route("/api/process", methods=["POST"])
