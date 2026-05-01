@@ -1,10 +1,11 @@
-FROM mathworks/matlab-runtime:r2021a
+FROM python:3.10-slim
 
-# Install Python to run the process.py wrapper
+# Install minimal dependencies
 USER root
 RUN apt-get update && \
-    apt-get install -y python3 python3-pip && \
-    rm -rf /var/lib/apt/lists/*
+    apt-get install -y --no-install-recommends \
+    procps \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
@@ -13,4 +14,5 @@ RUN pip3 install --no-cache-dir -r requirements.txt
 
 COPY . .
 
+# Run the python wrapper
 CMD ["python", "process.py"]
