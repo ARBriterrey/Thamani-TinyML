@@ -266,16 +266,19 @@ def main():
     # ------------------------------------------------------------------
     # Process — Call compiled MATLAB executable
     # ------------------------------------------------------------------
-    logger.info("Running MATLAB processing algorithm...")
-    
-    matlab_output_path = os.path.join(job_dir, "matlab_output.json")
-    txt_input_path = os.path.join(job_dir, "input.txt")
     
     executable_path = "/app/thamani_processor"
     
+    if not os.path.exists(executable_path):
+        logger.error("CRITICAL ERROR: MATLAB executable NOT FOUND at %s", executable_path)
+        sys.exit(1)
+
+    logger.info("Running MATLAB processing algorithm...")
+    matlab_output_path = os.path.join(job_dir, "matlab_output.json")
+    txt_input_path = os.path.join(job_dir, "input.txt")
+    
     try:
         # Call the standalone MATLAB executable
-        # Usage: ./thromani_processor <input_file> <output_file>
         subprocess.run(
             [executable_path, txt_input_path, matlab_output_path],
             check=True,
@@ -289,9 +292,8 @@ def main():
             
     except Exception as e:
         logger.error(f"MATLAB processing failed: {e}")
+        # Exit with error so the STM32 knows the analysis failed
         sys.exit(1)
-
-
 
     # Output strictly the format STM32 expects:
     # {"results":{"sysL":110,"sysH":120,...}}
@@ -303,9 +305,8 @@ def main():
     # Also log a summary
     res = matlab_results.get("results", {})
     logger.info(
-        "✅ Job %s complete — sys: %s/%s, Dia: %s/%s, MAP: %s/%s, PP: %s/%s, diagnosis: %s",
-        job_id, res.get("sysL"), res.get("sysH"), res.get("DiaL"), res.get("DiaH"),
-        res.get("MAPL"), res.get("MAPH"), res.get("PPL"), res.get("PPH"), res.get("diagnosis")
+        "✅ Job %s complete — sys: %s/%s, Dia: %s/%s, diagnosis: %s",
+        job_id, res.get("sysL"), res.get("sysH"), res.get("DiaL"), res.get("DiaH"), res.get("diagnosis")
     )
     sys.exit(0)
 
