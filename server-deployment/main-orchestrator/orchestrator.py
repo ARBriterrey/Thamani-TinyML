@@ -230,3 +230,58 @@ class MatlabOrchestrator:
 
         if removed:
             logger.info("Cleaned up %d old job(s)", removed)
+
+    def get_recent_jobs(self, limit: int = 5) -> list:
+        """
+        Scan all job directories and return metadata for the most recently received jobs.
+        """
+        jobs_dir = os.path.join(self.data_path, "jobs")
+        if not os.path.exists(jobs_dir):
+            return []
+
+        jobs = []
+        for job_id in os.listdir(jobs_dir):
+            job_path = os.path.join(jobs_dir, job_id)
+            if not os.path.isdir(job_path):
+                continue
+                
+            input_path = os.path.join(job_path, "input.json")
+            output_path = os.path.join(job_path, "output.json")
+            
+            job_data = {
+                "job_id": job_id,
+                "status": "processing",
+                "received_at": None,
+                "device_id": "UNKNOWN",
+                "result": None
+            }
+            
+            if os.path.exists(input_path):
+                try:
+                    with open(input_path, "r") as f:
+                        in_data = json.load(f)
+                        job_data["received_at"] = in_data.get("received_at")
+                        job_data["device_id"] = in_data.get("device_id", "UNKNOWN")
+                except Exception:
+                    pass
+                    
+            if os.path.exists(output_path):
+                try:
+                    with open(output_path, "r") as f:
+                        out_data = json.load(f)
+                        job_data["status"] = "completed"
+                        job_data["result"] = out_data.get("result", out_data)
+                except Exception:
+                    job_data["status"] = "failed"
+                    
+            # Use mtime of the job dir as a fallback received_at
+            if not job_data["received_at"]:
+                from datetime import datetime, timezone
+                mtime = os.path.getmtime(job_path)
+                job_data["received_at"] = datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat()
+                
+            jobs.append(job_data)
+            
+        # Sort by received_at descending
+        jobs.sort(key=lambda x: x["received_at"] or "", reverse=True)
+        return jobs[:limit]
