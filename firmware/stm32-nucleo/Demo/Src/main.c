@@ -11,7 +11,7 @@ UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
 // Buffer size must match CHUNK_SIZE_ACTUAL used in the transfer loop
-#define CHUNK_SIZE 2048
+#define CHUNK_SIZE 32768
 uint8_t dummy_data_buffer[CHUNK_SIZE];
 
 // UART Transmission Flags
@@ -55,9 +55,9 @@ int main(void)
   {
     // We will simulate sending a 2MB (2097152 bytes) ".bin" file.
     // Let's use 2048 byte chunks now to match the ESP32 buffer
-    const uint32_t TOTAL_FILE_SIZE = 2097152;
-    const uint32_t CHUNK_SIZE_ACTUAL = 2048;
-    const uint32_t TOTAL_CHUNKS = TOTAL_FILE_SIZE / CHUNK_SIZE_ACTUAL;
+    const uint32_t TOTAL_FILE_SIZE = 2621440;  // 2.5 MB
+    const uint32_t CHUNK_SIZE_ACTUAL = 32768;   // 32 KB
+    const uint32_t TOTAL_CHUNKS = TOTAL_FILE_SIZE / CHUNK_SIZE_ACTUAL; // 80 chunks
 
     char tx_start_msg[64];
     snprintf(tx_start_msg, sizeof(tx_start_msg), "<INIT:%lu>", TOTAL_FILE_SIZE);
@@ -141,7 +141,7 @@ int main(void)
             }
             
             if (ready) {
-                HAL_UART_Transmit(&huart1, dummy_data_buffer, CHUNK_SIZE_ACTUAL, 2000);
+                HAL_UART_Transmit(&huart1, dummy_data_buffer, CHUNK_SIZE_ACTUAL, 5000); // 5s: covers 32KB@921600 (est ~285ms)
                 
                 // Wait for <ACK_CHUNK>
                 start_tick = HAL_GetTick();
@@ -282,13 +282,13 @@ static void MX_USART1_UART_Init(void)
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
   huart1.Instance          = USART1;
-  huart1.Init.BaudRate     = 115200;
+  huart1.Init.BaudRate     = 921600;             // Step 1: high-speed UART (8x faster than 115200)
   huart1.Init.WordLength   = UART_WORDLENGTH_8B;
   huart1.Init.StopBits     = UART_STOPBITS_1;
   huart1.Init.Parity       = UART_PARITY_NONE;
   huart1.Init.Mode         = UART_MODE_TX_RX;
   huart1.Init.HwFlowCtl    = UART_HWCONTROL_NONE;
-  huart1.Init.OverSampling = UART_OVERSAMPLING_16;
+  huart1.Init.OverSampling = UART_OVERSAMPLING_8; // Required at 921600 on 84MHz APB2 clock
   HAL_UART_Init(&huart1);
 }
 

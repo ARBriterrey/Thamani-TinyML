@@ -10,7 +10,7 @@ UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
 // Buffer size must match CHUNK_SIZE_ACTUAL used in the transfer loop
-#define CHUNK_SIZE 2048
+#define CHUNK_SIZE 32768
 uint8_t dummy_data_buffer[CHUNK_SIZE];
 
 // UART Transmission Flags
@@ -97,9 +97,9 @@ int main(void)
   while (1)
   {
     // Simulate sending a 2MB (2097152 bytes) ".bin" file in 2048-byte chunks.
-    const uint32_t TOTAL_FILE_SIZE  = 2097152;
-    const uint32_t CHUNK_SIZE_ACTUAL = 2048;
-    const uint32_t TOTAL_CHUNKS     = TOTAL_FILE_SIZE / CHUNK_SIZE_ACTUAL;
+    const uint32_t TOTAL_FILE_SIZE  = 2621440; // 2.5 MB
+    const uint32_t CHUNK_SIZE_ACTUAL = 32768;   // 32 KB chunks
+    const uint32_t TOTAL_CHUNKS     = TOTAL_FILE_SIZE / CHUNK_SIZE_ACTUAL; // 80 chunks
 
     char tx_start_msg[64];
     snprintf(tx_start_msg, sizeof(tx_start_msg), "<INIT:%lu>", TOTAL_FILE_SIZE);
@@ -187,7 +187,7 @@ int main(void)
             }
             
             if (ready) {
-                HAL_UART_Transmit(&huart1, dummy_data_buffer, CHUNK_SIZE_ACTUAL, 2000);
+                HAL_UART_Transmit(&huart1, dummy_data_buffer, CHUNK_SIZE_ACTUAL, 1000); // 1s timeout for 32KB @ 921600
                 
                 // Wait for <ACK_CHUNK> or <NACK_CHUNK>
                 start_tick = HAL_GetTick();

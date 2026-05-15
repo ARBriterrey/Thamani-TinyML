@@ -1,6 +1,6 @@
 # Thamani-TinyML Project: Client Deliverables Summary
 
-**Last Updated:** April 22, 2026
+**Last Updated:** May 11, 2026
 
 ## 1. Executive Summary
 
@@ -23,6 +23,7 @@ We have successfully designed and built a highly scalable, containerized backend
 *   **Ephemeral processing Workers (The "Spokes"):**
     *   Implemented an on-demand container execution model via the Docker SDK.
     *   When the orchestrator receives data, it dynamically spins up isolated, short-lived worker containers to execute the complex mathematical modeling (e.g., MATLAB risk calculations).
+    *   Dataset handling, signal processing, and integration with the cloud pipeline's worker architecture.
     *   Workers process the raw data, output the risk score, and immediately spin down, ensuring highly efficient resource utilization.
 *   **Inter-Container Data Exchange:** Built a secure, volume-based data exchange mechanism ensuring the seamless flow of raw input data and processed risk score outputs between the orchestrator and the worker nodes.
 *   **Secure Infrastructure (mTLS & HTTPS):** Deployed an Nginx reverse proxy on the GCP server to enforce Mutual TLS (mTLS) client certificate authentication. Edge devices securely connect via a custom subdomain (`edge.thamanihc.com`) using embedded X.509 certificates to ensure data privacy and authenticity.
@@ -71,3 +72,24 @@ In order to optimize hardware costs and simplify the supply chain, the architect
 *   **ESP32 Memory Standardization:** Purged all dynamic external memory (`ps_malloc`) allocations within the ESP32 code in favor of a rigid, 4096-byte chunk buffer that guarantees crash-free transmission.
 *   **STM32 Hardware-Level Pacing:** The STM32 now strictly controls file delivery pacing. It wraps 2KB chunks embedded with software CRC32 validation hashes. If the ESP32 detects network droppage, it returns a NACK, and the STM32 automatically initiates a 3x retry policy for the corrupt block.
 *   **Flask Orchestrator Endpoints:** Retrofitted the server to support multi-part chunked payload sessions via new `/api/upload/init`, `/api/upload/chunk`, and `/api/upload/finish` endpoints. The server verifies integrity on-the-fly and seamlessly passes the assembled payload to the MATLAB worker just as before.
+
+---
+
+## 7. Corporate Digital Presence & Web App Deliverables
+
+In addition to the hardware and cloud architecture, we have designed and developed the primary digital platform for the brand, targeting clinical partners, talent, and investors.
+
+### System Components Delivered:
+*   **Web Platform Implementation:** Developed a modern frontend application (`thamani-web`) using React and Next.js, featuring a clinical, research-backed aesthetic with strong red-themed brand identity.
+*   **Interactive 3D Visualizations:** Implemented complex WebGL/Three.js assets (e.g., `thamani-network.js`), providing a dynamic, pulsing 3D representation of a cardiovascular network to engage site visitors.
+*   **Product Strategy Documentation:** Authored the comprehensive Product Requirements Document (`Thamani_Healthcare_Website_PRD.md`) defining target audiences, success metrics, and the overarching project vision.
+
+---
+
+## 8. Future Directions
+
+In parallel to the MATLAB development, we have begun designing a Machine Learning (ML) algorithm. As the MATLAB code is tested and validated on the server, the generated data will be used to continuously train this ML model.
+
+### Strategic Implementation Plan:
+*   **Parallel Execution Phase:** Initially, both the established MATLAB code and the new ML code will run in parallel on the server to process incoming 3-phase data. This ensures the ML model's outputs are strictly validated against the mathematical benchmarks.
+*   **Standalone ML Migration:** Once accuracy is proven, the ML code will fully replace the MATLAB dependency, transitioning into a standalone, lightweight computational structure. This ultimately paves the way for direct TinyML execution on the edge devices.
